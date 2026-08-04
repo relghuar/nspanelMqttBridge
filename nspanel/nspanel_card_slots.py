@@ -122,6 +122,26 @@ class NSPanelCardSlot(): #pylint: disable=too-many-instance-attributes
         if "popupType" in json_data and json_data["popupType"] is not None:
             self.popup_type = str(json_data["popupType"]).upper()
 
+    def findevalexpr(self, evaltxt):
+        if not isinstance(evaltxt,str) or not evaltxt.startswith('%{'):
+            return -1
+        return evaltxt.rfind('}')
+
+    def evaluate(self, evaltxt):
+        fei = self.findevalexpr(evaltxt)
+        if fei <= 0:
+            return None
+        expr = evaltxt[2:fei]
+        params = self.__dict__
+        params['dynarg'] = evaltxt[fei+1:]  # TODO: what about this?? we do not have "openhab-item" to handle here...
+        try:
+            v = eval(expr, globals(), params)
+            self.log.debug("Slot expression evaluated, '%s' on %s ==> '%s'", expr, params, v)
+            return v
+        except Exception as e:
+            self.log.warning("Slot expression evaluation failed, '%s' on %s : %s", expr, params, e)
+            return None
+
     def get_icon(self):
         """
         returns the best matching icon for this slot
@@ -419,6 +439,10 @@ class NsPanelCardSlotOhItemWeather( NsPanelCardSlotOhItem ):
             self.time_item = oh().item_factory(str(json_data["timeItem"]), card.item_update_callback )
         else:
             self.time_item = None
+        if "iconColor" in json_data and json_data["iconColor"] is not None:  # allow user to set individual icons' colors independent of skin settings
+            self.custom_icon_color = json_data["iconColor"]
+        else:
+            self.custom_icon_color = None
 
         self.log.debug("NsPanelCardSlotOhItemWaether '%s' constructed!", self.name )
 
@@ -435,9 +459,6 @@ class NsPanelCardSlotOhItemWeather( NsPanelCardSlotOhItem ):
         if weather_id is None:
             weather_id = "error"
 
-        icon = skin.key("openweathermap_icons", weather_id )
-        icon_color = str(name_to_16bit_color(skin.key("openweathermap_icons_colors", weather_id )))
-
         if self.text_item is not None:
             self.text_item.update_item()
             text = self.text_item.state_formated #this can be the tempearture or other info
@@ -446,13 +467,23 @@ class NsPanelCardSlotOhItemWeather( NsPanelCardSlotOhItem ):
 
         time_str = "00:00"
         if self.time_item is not None:
-            #bild time string for this
+            # build time string for this
             try:
                 dt = datetime.fromisoformat(self.time_item.state)
                 time_str = dt.strftime(translate.weather_time_templ())
-            except ValueError:
+            except (ValueError,TypeError):
                 # not a date, show item state as simple string value
                 time_str = f"{self.time_item.state}"
+
+        # leave icon and its color for last to have all OH items evaluated
+        icon = skin.key("openweathermap_icons", weather_id )
+        if self.custom_icon_color is None:
+            icon_color = str(name_to_16bit_color(skin.key("openweathermap_icons_colors", weather_id )))
+        elif self.findevalexpr(self.custom_icon_color) > 0:
+            v = self.evaluate(self.custom_icon_color)
+            icon_color = str(name_to_16bit_color(v)) if v is not None else self.get_icon_color()
+        else:
+            icon_color = self.get_icon_color()
 
         payload = "~text~"+self.name+"~" + icon + '~' + icon_color + '~' + time_str + '~' + text
         self.log.debug("Weather slot payload created: %s", payload)
