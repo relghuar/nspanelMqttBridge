@@ -114,9 +114,12 @@ class OHItem: #pylint: disable=too-many-instance-attributes
         self.update_callbacks = []
         if update_callback is not None:
             self.update_callbacks.append(update_callback)
-        self.state = "None"
-        self.state_int = "None"
-        self.state_formated = "None"
+        self.evalstr = None
+        self.initeval()
+        self.state = self.getstr()
+        self.json = {'state':self.state} if self.isstr() else None
+        self.state_int = self.state
+        self.state_formated = self.state
         self.type = "None"
         self.group_type = None
         self.label = "No OH Label"
@@ -129,6 +132,37 @@ class OHItem: #pylint: disable=too-many-instance-attributes
         self.options = {}
 
         self.log.debug("OHItem '%s' constructed!", name)
+
+    def __repr__(self):
+        return '[OHItem::%s]'%(self.__dict__)
+
+    def isstr(self):
+        return isinstance(self.name,str) and self.name.startswith('!')
+
+    def getstr(self):
+        return self.name[1:] if self.isstr() else "None"
+
+    def initeval(self):
+        if isinstance(self.name,str) and self.name.startswith('%{'):
+            fei = self.name.rfind('}')
+            if fei > 0:
+                self.evalstr = self.name[2:fei]
+                self.name = self.name[fei+1:]
+
+    def iseval(self):
+        return self.evalstr is not None
+
+    def geteval(self):
+        if not self.iseval() or self.json is None:
+            return self.state
+        #self.log.debug("Evaluating OH item %s==%s:%s:%s as { %s }", self.name, self.state, self.state_formated, self.json, self.evalstr)
+        try:
+            v = eval(self.evalstr, globals(), self.__dict__)
+            self.log.debug("OH item evaluated, '%s' on %s ==> '%s'", self.evalstr, self.__dict__, v)
+        except Exception as e:
+            self.log.warning("OH item evaluation failed, '%s' on %s : %s", self.evalstr, self.__dict__, e)
+            v = self.state
+        return v
 
     def oh_options_to_dict( self, options ):
         """
@@ -151,6 +185,8 @@ class OHItem: #pylint: disable=too-many-instance-attributes
         """
         makes an rest api request for an item state to openhab and returns the json response
         """
+        if self.isstr():
+            return json.loads( '{"name":"%s", "state":"%s"}'%(self.name,self.state) )
         self.log.debug("Get item_json for '%s'", self.name)
         try:
             response = self.OHConnection.get_item( self.name )
@@ -204,6 +240,7 @@ class OHItem: #pylint: disable=too-many-instance-attributes
         """
         updates the state of an in openhab
         """
+        if self.isstr(): return False
         self.log.debug("Send %s to item %s", state, self.name)
         try:
             self.OHConnection.post_item( self.name, state)
@@ -227,7 +264,9 @@ class OHItem: #pylint: disable=too-many-instance-attributes
         """
         update the item if needed and request update from openhab
         """
+        if self.isstr(): return self.state
         item_json = self.get_item_json()
+        self.json = item_json
         self.update_json( item_json, local_options )
 
     def update_json(self, item_json, local_options=None): #pylint: disable=too-many-branches
@@ -279,6 +318,9 @@ class OHItem: #pylint: disable=too-many-instance-attributes
                     self.state_formated = item_json["stateDescription"]["pattern"] % value
                 else:
                     self.state_formated = self.state
+                if self.iseval():
+                    self.state = self.geteval()
+                    self.state_formated = self.state
             except (ValueError,KeyError,TypeError) as error:
                 self.log.debug("Could not format item data for item '%s'. Got error: %s", self.name, error)
                 self.state_formated = "format error"
@@ -291,6 +333,7 @@ class OHItem: #pylint: disable=too-many-instance-attributes
         """
         returns the persitance data for this item in the last period in min
         """
+        if self.isstr(): return None
         values = []
 
         persist_json = self.OHConnection.get_persistance( self.name, start_time, end_time ).json()
@@ -318,6 +361,7 @@ class OHItem: #pylint: disable=too-many-instance-attributes
         """
         returns the persitance data for this item in the last period in min
         """
+        if self.isstr(): return None
         values = []
 
         persist_json = self.OHConnection.get_persistance( self.name, start_time, end_time ).json()
